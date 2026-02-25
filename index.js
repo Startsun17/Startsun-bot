@@ -11,7 +11,7 @@ const logger = pino({ level: "silent" });
 
 /* ===== SERVER UNTUK RAILWAY ===== */
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8080;
 
 app.get("/", (req, res) => {
   res.send("Startsun Bot aktif 🚀");
@@ -38,31 +38,36 @@ async function connectToWhatsApp() {
   sock.ev.on("connection.update", async (update) => {
     const { connection, lastDisconnect } = update;
 
+    if (connection === "connecting") {
+      console.log("Menghubungkan ke WhatsApp...");
+    }
+
+    if (connection === "open") {
+      console.log("✅ Bot berhasil connect!");
+    }
+
     if (connection === "close") {
       const shouldReconnect =
         lastDisconnect?.error?.output?.statusCode !==
         DisconnectReason.loggedOut;
+
+      console.log("Koneksi tertutup. Reconnect:", shouldReconnect);
 
       if (shouldReconnect) {
         setTimeout(() => connectToWhatsApp(), 2000);
       }
     }
 
-    if (connection === "open") {
-      console.log("✅ Bot berhasil connect!");
+    // 🔥 PAIRING CODE DIMINTA DI SINI (STABIL)
+    if (!state.creds.registered) {
+      const code = await sock.requestPairingCode("6281938301975");
+      console.log("=================================");
+      console.log("Kode pairing kamu:", code);
+      console.log("=================================");
     }
   });
 
-  // ===== PAIRING CODE TANPA QR =====
-  if (!sock.authState?.creds?.registered) {
-    const phoneNumber = "6281938301975";
-    const code = await sock.requestPairingCode(phoneNumber);
-    console.log("=================================");
-    console.log("Kode pairing kamu:", code);
-    console.log("=================================");
-  }
-
-  // ===== AUTO REPLY =====
+  // AUTO REPLY
   sock.ev.on("messages.upsert", async ({ messages }) => {
     const msg = messages[0];
     if (!msg.message) return;
