@@ -1,35 +1,71 @@
 import makeWASocket, {
   DisconnectReason,
   fetchLatestBaileysVersion,
-  useMultiFileAuthState,
+  useMultiFileAuthState
 } from "@whiskeysockets/baileys";
+
 import pino from "pino";
 import express from "express";
 import QRCode from "qrcode";
 
-const logger = pino({ level: "silent" });
-
 const PORT = process.env.PORT || 8080;
+let lastQr = null;
 
-/**
- * WA_NUMBER:
- * - isi nomor WA kamu format internasional TANPA + dan TANPA spasi
- * - contoh Indonesia: 6281234567890
- *
- * Kalau WA_NUMBER diisi -> bot akan minta PAIRING CODE (lebih gampang, ga perlu scan barcode).
- * Kalau WA_NUMBER kosong -> bot akan pakai QR (tapi kita sediain link /qr biar QR-nya jelas).
- */
-const WA_NUMBER = (process.env.WA_NUMBER || "").replace(/\D/g, "");
+const app = express();
 
-// Simpan QR terakhir biar bisa ditampilin di /qr
-let lastQrString = null;
+app.get("/", (req, res) => {
+  res.send("Bot aktif. Buka /qr untuk scan.");
+});
 
-async function startBot() {
-  const app = express();
+app.get("/qr", async (req, res) => {
+  if (!lastQr) {
+    return res.send("QR belum tersedia, refresh lagi.");
+  }
+  const qrImage = await QRCode.toBuffer(lastQr);
+  res.setHeader("Content-Type", "image/png");
+  res.send(qrImage);
+});
 
-  // Halaman utama
-  app.get("/", (req, res) => {
-    res.type("html").send(`
-      <html>
-        <head><meta name="viewport" content="width=device-width, initial-scale=1"/></head>
-        <body style="font-family: Arial;
+app.listen(PORT, () => {
+  console.log("Web server ready di port", PORT);
+});
+
+async function start() {
+  const { state, saveCreds } = await useMultiFileAuthState("session");
+  const { version } = await fetchLatestBaileysVersion();
+
+  const sock = makeWASocket({
+    logger: pino({ level: "silent" }),
+    auth: state,
+    version,
+    browser: ["Startsun-bot", "Chrome", "1.0.0"]
+  });
+
+  sock.ev.on("creds.update", saveCreds);
+
+  sock.ev.on("connection.update", async (update) => {
+    const { connection, qr, lastDisconnect } = update;
+
+    if (qr) {
+      lastQr = qr;
+      console.log("QR tersedia di endpoint /qr");
+    }
+
+    if (connection === "open") {
+      lastQr = null;
+      console.log("Bot berhasil connect!");
+    }
+
+    if (connection === "close") {
+      const shouldReconnect =
+        lastDisconnect?.error?.output?.statusCode !==
+        DisconnectReason.loggedOut;
+
+      if (shouldReconnect) {
+        setTimeout(start, 3000);
+      }
+    }
+  });
+}
+
+start();
