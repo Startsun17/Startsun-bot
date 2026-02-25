@@ -1,12 +1,26 @@
 import makeWASocket, {
   DisconnectReason,
   useMultiFileAuthState,
-  fetchLatestBaileysVersion,
+  fetchLatestBaileysVersion
 } from "@whiskeysockets/baileys";
-import pino from "pino";
-import qrcode from "qrcode-terminal";
 
-const logger = pino({ level: "silent" }); // ubah ke "info" kalau mau lihat log rame
+import pino from "pino";
+import express from "express";
+
+const logger = pino({ level: "silent" });
+
+/* ===== SERVER UNTUK RAILWAY ===== */
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+app.get("/", (req, res) => {
+  res.send("Startsun Bot aktif 🚀");
+});
+
+app.listen(PORT, () => {
+  console.log("Web server jalan di port", PORT);
+});
+/* ================================ */
 
 async function connectToWhatsApp() {
   const { state, saveCreds } = await useMultiFileAuthState("session");
@@ -14,90 +28,64 @@ async function connectToWhatsApp() {
 
   const sock = makeWASocket({
     logger,
-    printQRInTerminal: false, // kita handle QR manual biar pasti muncul
     auth: state,
     version,
-    browser: ["Startsun-bot", "Chrome", "1.0.0"],
+    browser: ["Startsun-bot", "Chrome", "1.0.0"]
   });
 
-  // simpan session tiap update
   sock.ev.on("creds.update", saveCreds);
 
-  // koneksi update (QR / reconnect / close)
   sock.ev.on("connection.update", async (update) => {
-    const { connection, lastDisconnect, qr } = update;
+    const { connection, lastDisconnect } = update;
 
-    if (qr) {
-      console.log("Scan QR ini ya:");
-      qrcode.generate(qr, { small: true });
+    if (connection === "close") {
+      const shouldReconnect =
+        lastDisconnect?.error?.output?.statusCode !==
+        DisconnectReason.loggedOut;
+
+      if (shouldReconnect) {
+        setTimeout(() => connectToWhatsApp(), 2000);
+      }
     }
 
     if (connection === "open") {
       console.log("✅ Bot berhasil connect!");
     }
-
-    if (connection === "close") {
-      const code = lastDisconnect?.error?.output?.statusCode;
-
-      const shouldReconnect = code !== DisconnectReason.loggedOut;
-      console.log("❌ Koneksi putus. Code:", code, "| Reconnect:", shouldReconnect);
-
-      if (shouldReconnect) {
-        // tunggu bentar biar nggak spam reconnect
-        setTimeout(() => connectToWhatsApp(), 2000);
-      } else {
-        console.log("⚠️ Logged out. Hapus folder 'session' lalu scan QR ulang.");
-      }
-    }
   });
 
-  // handler pesan masuk
-  sock.ev.on("messages.upsert", async ({ messages, type }) => {
-    if (type !== "notify") return;
+  // ===== PAIRING CODE TANPA QR =====
+  if (!sock.authState?.creds?.registered) {
+    const phoneNumber = "6281938301975";
+    const code = await sock.requestPairingCode(phoneNumber);
+    console.log("=================================");
+    console.log("Kode pairing kamu:", code);
+    console.log("=================================");
+  }
 
-    const msg = messages?.[0];
-    if (!msg?.message) return;
+  // ===== AUTO REPLY =====
+  sock.ev.on("messages.upsert", async ({ messages }) => {
+    const msg = messages[0];
+    if (!msg.message) return;
     if (msg.key.fromMe) return;
 
-    const from = msg.key.remoteJid;
-
+    const from = msg.key.remoteId;
     const text =
       msg.message.conversation ||
       msg.message.extendedTextMessage?.text ||
-      msg.message.imageMessage?.caption ||
-      msg.message.videoMessage?.caption ||
       "";
 
-    const body = text.trim().toLowerCase();
-    if (!body) return;
+    const body = text.toLowerCase();
 
-    // COMMANDS
     if (body === "ping") {
-      await sock.sendMessage(from, { text: "pong 🏓 Bot aktif!!" });
-      return;
+      await sock.sendMessage(from, { text: "pong 🏓 Bot aktif!" });
     }
 
     if (body === "order") {
       await sock.sendMessage(from, {
-        text: "🛒 Halo kak! Orderan kamu sedang diproses ya 🙌✨",
+        text: "🌷 Halo kak! Orderan kamu sedang diproses ya 💛✨"
       });
-      return;
-    }
-
-    if (body === "menu") {
-      await sock.sendMessage(from, {
-        text:
-          "📌 *Menu Startsun-bot*\n" +
-          "- ping\n" +
-          "- order\n" +
-          "- menu\n",
-      });
-      return;
     }
   });
-
-  return sock;
 }
 
-// START
 connectToWhatsApp();
