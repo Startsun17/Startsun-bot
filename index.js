@@ -3,15 +3,14 @@ import makeWASocket, {
   useMultiFileAuthState,
   fetchLatestBaileysVersion,
 } from "@whiskeysockets/baileys";
-
 import pino from "pino";
 import express from "express";
 
 const app = express();
 app.get("/", (_, res) => res.send("Bot aktif"));
-app.listen(process.env.PORT || 8080, () => {
-  console.log("Web server ready");
-});
+app.listen(process.env.PORT || 8080, () =>
+  console.log("Web server ready")
+);
 
 const logger = pino({ level: "silent" });
 const PHONE_NUMBER = "6281938301975";
@@ -32,7 +31,23 @@ async function start() {
   sock.ev.on("connection.update", async (update) => {
     const { connection, lastDisconnect } = update;
 
-    if (!state.creds.registered) {
+    if (connection === "connecting") {
+      console.log("⏳ Connecting to WhatsApp...");
+    }
+
+    if (connection === "open") {
+      console.log("✅ Connected!");
+    }
+
+    if (connection === "close") {
+      console.log("❌ Closed, reconnecting...");
+      setTimeout(start, 3000);
+    }
+  });
+
+  // 🔥 DELAY REQUEST PAIRING 5 DETIK (BIAR STABIL)
+  if (!state.creds.registered) {
+    setTimeout(async () => {
       try {
         const code = await sock.requestPairingCode(PHONE_NUMBER);
         console.log("=================================");
@@ -42,38 +57,8 @@ async function start() {
       } catch (err) {
         console.log("Gagal minta pairing:", err?.message);
       }
-    }
-
-    if (connection === "open") {
-      console.log("✅ CONNECTED");
-    }
-
-    if (connection === "close") {
-      const shouldReconnect =
-        lastDisconnect?.error?.output?.statusCode !==
-        DisconnectReason.loggedOut;
-
-      if (shouldReconnect) {
-        setTimeout(start, 2000);
-      }
-    }
-  });
-
-  sock.ev.on("messages.upsert", async ({ messages }) => {
-    const msg = messages[0];
-    if (!msg?.message) return;
-    if (msg.key.fromMe) return;
-
-    const from = msg.key.remoteJid;
-    const text =
-      msg.message.conversation ||
-      msg.message.extendedTextMessage?.text ||
-      "";
-
-    if (text.toLowerCase() === "ping") {
-      await sock.sendMessage(from, { text: "pong 🏓 Bot aktif!" });
-    }
-  });
+    }, 5000);
+  }
 }
 
 start();
