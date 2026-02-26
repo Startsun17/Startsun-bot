@@ -131,17 +131,27 @@ async function startWA() {
         console.log("Pesan masuk:", body, "dari:", jid);
 
         // command contoh
-        if (body === "ping") {
+         {
           await sock.sendMessage(jid, { text: "pong 🔥 bot aktif!" });
           return;
         }
 
-        if (body === "order") {
+         {
           await sock.sendMessage(jid, {
             text: "✅ Halo kak! Orderan kamu sedang diproses ya 🤝",
           });
           return;
         }
+        const commands = {
+  ping: "pong 🔥 bot aktif!",
+  order: "✅ Halo kak! Orderan kamu sedang diproses ya 🤝",
+  menu: "📋 *MENU*\n\n• ping\n• order\n• menu"
+};
+
+if (commands[body]) {
+  await sock.sendMessage(jid, { text: commands[body] });
+  return;
+}
 
         // default: opsional
         // await sock.sendMessage(jid, { text: "Ketik: ping / order" });
