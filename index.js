@@ -7,95 +7,12 @@ import pino from "pino";
 import express from "express";
 import QRCode from "qrcode";
 import fs from "fs";
-import path from "path";
 
-// ================== CONFIG ==================
+// ================== WEB SERVER ==================
+const app = express();
 const PORT = process.env.PORT || 8080;
 
-// WAJIB di Railway Variables:
-// OWNER = 628xxxxxxxxxx (format 62, tanpa 0)
-const OWNER = (process.env.OWNER || "").trim();
-
-// Railway Volume: set mount ke /data
-const DATA_DIR = "./data";
-const SESSION_DIR = "./session";
-const DB_FILE = "./data.json";
-
 let lastQr = null;
-
-// ================== HELPERS ==================
-function ensureDir(dir) {
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-}
-
-function normalizeNumber(num) {
-  return (num || "").replace(/[^\d]/g, ""); // digits only
-}
-
-function isOwner(jid) {
-  const owner = normalizeNumber(OWNER);
-  const jidNum = normalizeNumber((jid || "").split("@")[0]); // 628xxx@s.whatsapp.net
-  return owner && jidNum === owner;
-}
-
-async function rejectNotOwner(sock, jid) {
-  await sock.sendMessage(jid, { text: "⛔ Command ini khusus *OWNER*." });
-}
-
-// ================== SIMPLE DB (PERSISTENT) ==================
-function loadDB() {
-  ensureDir(DATA_DIR);
-  try {
-    if (!fs.existsSync(DB_FILE)) return { lists: {}, welcome: {} };
-    return JSON.parse(fs.readFileSync(DB_FILE, "utf-8"));
-  } catch {
-    return { lists: {}, welcome: {} };
-  }
-}
-
-function saveDB(db) {
-  ensureDir(DATA_DIR);
-  fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2));
-}
-
-function getUserList(db, jid) {
-  if (!db.lists) db.lists = {};
-  if (!db.lists[jid]) db.lists[jid] = [];
-  return db.lists[jid];
-}
-
-function formatList(list) {
-  if (!list || list.length === 0) {
-    return "📭 List masih kosong.";
-  }
-  const lines = list.map((x, i) => `${i + 1}. ${x.text}`);
-  return `📌 *LIST*\n\n${lines.join("\n")}`;
-}
-
-function formatMenu(isOwnerUser) {
-  let menu =
-    "📋 *MENU*\n\n" +
-    "• ping\n" +
-    "• order\n" +
-    "• menu\n" +
-    "• list\n" +
-    "• welcome\n";
-
-  if (isOwnerUser) {
-    menu +=
-      "\n🔐 *OWNER ONLY*\n" +
-      "• addlist <item>\n" +
-      "• dellist <nomor>\n" +
-      "• clearlist\n" +
-      "• setwelcome <pesan>\n" +
-      "• delwelcome\n";
-  }
-
-  return menu;
-}
-
-// ================== WEB SERVER (QR VIEW) ==================
-const app = express();
 
 app.get("/", (req, res) => {
   res.send("OK ✅ Startsun-bot jalan. Buka /qr untuk scan barcode.");
@@ -103,11 +20,7 @@ app.get("/", (req, res) => {
 
 app.get("/qr", async (req, res) => {
   try {
-    if (!lastQr) {
-      return res
-        .status(404)
-        .send("QR belum tersedia. Tunggu sebentar lalu refresh /qr");
-    }
+    if (!lastQr) return res.status(404).send("QR belum tersedia. Tunggu lalu refresh /qr");
     const img = await QRCode.toBuffer(lastQr, { width: 520, margin: 2 });
     res.setHeader("Content-Type", "image/png");
     res.send(img);
@@ -118,14 +31,78 @@ app.get("/qr", async (req, res) => {
 
 app.listen(PORT, () => console.log("Web server ready di port", PORT));
 
+// ================== SIMPLE LOCAL DB (NO VOLUME) ==================
+const DB_FILE = "./data.json";
+
+function loadDB() {
+  try {
+    if (!fs.existsSync(DB_FILE)) return { lists: {}, welcome: {} };
+    return JSON.parse(fs.readFileSync(DB_FILE, "utf-8"));
+  } catch {
+    return { lists: {}, welcome: {} };
+  }
+}
+
+function saveDB(db) {
+  fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2));
+}
+
+function getUserList(db, jid) {
+  if (!db.lists) db.lists = {};
+  if (!db.lists[jid]) db.lists[jid] = [];
+  return db.lists[jid];
+}
+
+function formatList(list) {
+  if (!list || list.length === 0) return "📭 List masih kosong.";
+  const lines = list.map((x, i) => `${i + 1}. ${x.text}`);
+  return `📌 *LIST*\n\n${lines.join("\n")}`;
+}
+
+function formatMenu(ownerUser) {
+  let t =
+    "📋 *MENU*\n\n" +
+    "• ping\n" +
+    "• order\n" +
+    "• menu\n" +
+    "• list\n" +
+    "• welcome\n";
+
+  if (ownerUser) {
+    t +=
+      "\n🔐 *OWNER ONLY*\n" +
+      "• addlist <item>\n" +
+      "• dellist <nomor>\n" +
+      "• clearlist\n" +
+      "• setwelcome <pesan>\n" +
+      "• delwelcome\n";
+  }
+  return t;
+}
+
+// ================== OWNER CHECK ==================
+// Railway Variables: OWNER=628xxxxxxxxxx (format 62 tanpa 0)
+function normalizeNumber(num) {
+  return (num || "").replace(/[^\d]/g, "");
+}
+
+function isOwner(jid) {
+  const owner = normalizeNumber(process.env.OWNER || "");
+  const jidNum = normalizeNumber((jid || "").split("@")[0]);
+  return owner && jidNum === owner;
+}
+
+async function rejectNotOwner(sock, jid) {
+  await sock.sendMessage(jid, { text: "⛔ Command ini khusus *OWNER*." });
+}
+
 // ================== WHATSAPP BOT ==================
 const logger = pino({ level: "silent" });
 
 async function startWA() {
   try {
-    ensureDir(SESSION_DIR);
-
-    const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
+    // session disimpan lokal folder ./session (tanpa volume = bisa hilang jika restart)
+    const { state, saveCreds } = await useMultiFileAuthState("./session");
     const { version } = await fetchLatestBaileysVersion();
 
     const sock = makeWASocket({
@@ -143,7 +120,7 @@ async function startWA() {
 
       if (qr) {
         lastQr = qr;
-        console.log("📷 QR baru tersedia. Buka /qr untuk scan.");
+        console.log("QR baru tersedia. Buka /qr untuk scan.");
       }
 
       if (connection === "open") {
@@ -158,14 +135,11 @@ async function startWA() {
         console.log("❌ Koneksi putus. code:", statusCode, "| reconnect:", shouldReconnect);
 
         if (shouldReconnect) setTimeout(startWA, 3000);
-        else {
-          console.log("⚠️ Logged out. Hapus folder session lalu scan lagi.");
-          console.log("   (Karena session disimpan di /data/session, hapus via redeploy + reset volume kalau perlu)");
-        }
+        else console.log("⚠️ Logged out. Hapus folder 'session' lalu deploy ulang dan scan QR lagi.");
       }
     });
 
-    // ================== MESSAGE HANDLER ==================
+    // ================== HANDLER PESAN ==================
     sock.ev.on("messages.upsert", async ({ messages, type }) => {
       try {
         if (type !== "notify") return;
@@ -176,7 +150,6 @@ async function startWA() {
 
         const jid = msg.key.remoteJid;
 
-        // Ambil teks (chat biasa / caption)
         const text =
           msg.message.conversation ||
           msg.message.extendedTextMessage?.text ||
@@ -186,7 +159,6 @@ async function startWA() {
 
         if (!text) return;
 
-        // prefix fleksibel: .menu, !menu, #menu, atau tanpa prefix
         const cleaned = text.trim().toLowerCase().replace(/^[.!#]/, "");
         const [cmdRaw, ...rest] = cleaned.split(/\s+/);
         const cmd = (cmdRaw || "").trim();
@@ -195,7 +167,7 @@ async function startWA() {
         const db = loadDB();
         const ownerUser = isOwner(jid);
 
-        // ====== BASIC COMMANDS ======
+        // ===== BASIC =====
         if (cmd === "menu" || cmd === "help") {
           await sock.sendMessage(jid, { text: formatMenu(ownerUser) });
           return;
@@ -207,13 +179,11 @@ async function startWA() {
         }
 
         if (cmd === "order") {
-          await sock.sendMessage(jid, {
-            text: "✅ Halo kak! Orderan kamu sedang diproses ya 🤝",
-          });
+          await sock.sendMessage(jid, { text: "✅ Halo kak! Orderan kamu sedang diproses ya 🤝" });
           return;
         }
 
-        // ====== WELCOME (OWNER ONLY SET/DEL) ======
+        // ===== WELCOME =====
         if (!db.welcome) db.welcome = {};
 
         if (cmd === "welcome") {
@@ -226,10 +196,9 @@ async function startWA() {
 
         if (cmd === "setwelcome") {
           if (!ownerUser) return rejectNotOwner(sock, jid);
+
           if (!args) {
-            await sock.sendMessage(jid, {
-              text: "Format: setwelcome <pesan>\nContoh: setwelcome Halo kak 👋",
-            });
+            await sock.sendMessage(jid, { text: "Format: setwelcome <pesan>\nContoh: setwelcome Halo kak 👋" });
             return;
           }
           db.welcome[jid] = args;
@@ -240,13 +209,14 @@ async function startWA() {
 
         if (cmd === "delwelcome") {
           if (!ownerUser) return rejectNotOwner(sock, jid);
+
           delete db.welcome[jid];
           saveDB(db);
           await sock.sendMessage(jid, { text: "🗑️ Welcome dihapus." });
           return;
         }
 
-        // ====== LIST SYSTEM ======
+        // ===== LIST =====
         const userList = getUserList(db, jid);
 
         if (cmd === "list") {
@@ -258,16 +228,12 @@ async function startWA() {
           if (!ownerUser) return rejectNotOwner(sock, jid);
 
           if (!args) {
-            await sock.sendMessage(jid, {
-              text: "Format: addlist <item>\nContoh: addlist Netflix",
-            });
+            await sock.sendMessage(jid, { text: "Format: addlist <item>\nContoh: addlist Netflix" });
             return;
           }
           userList.push({ text: args, ts: Date.now() });
           saveDB(db);
-          await sock.sendMessage(jid, {
-            text: `✅ Ditambahin: *${args}*\n\n${formatList(userList)}`,
-          });
+          await sock.sendMessage(jid, { text: `✅ Ditambahin: *${args}*\n\n${formatList(userList)}` });
           return;
         }
 
@@ -276,16 +242,12 @@ async function startWA() {
 
           const n = parseInt(args, 10);
           if (!n || n < 1 || n > userList.length) {
-            await sock.sendMessage(jid, {
-              text: "Format: dellist <nomor>\nContoh: dellist 2",
-            });
+            await sock.sendMessage(jid, { text: "Format: dellist <nomor>\nContoh: dellist 2" });
             return;
           }
           const removed = userList.splice(n - 1, 1)[0];
           saveDB(db);
-          await sock.sendMessage(jid, {
-            text: `🗑️ Dihapus: *${removed.text}*\n\n${formatList(userList)}`,
-          });
+          await sock.sendMessage(jid, { text: `🗑️ Dihapus: *${removed.text}*\n\n${formatList(userList)}` });
           return;
         }
 
@@ -298,8 +260,7 @@ async function startWA() {
           return;
         }
 
-        // ====== AUTO WELCOME (OPSIONAL) ======
-        // Kalau kamu gak mau auto, hapus blok ini.
+        // ===== AUTO WELCOME (opsional) =====
         const hiWords = ["hi", "hii", "halo", "hallo", "assalamualaikum", "p"];
         if (hiWords.includes(cmd)) {
           const w = db.welcome[jid];
