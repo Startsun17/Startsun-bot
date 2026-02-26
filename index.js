@@ -129,7 +129,19 @@ async function startWA() {
         else console.log("⚠️ Logged out. Hapus folder 'session' lalu deploy ulang dan scan QR lagi.");
       }
     });
+function normalizeNumber(num) {
+  return (num || "").replace(/[^\d]/g, ""); // ambil digit doang
+}
 
+function isOwner(jid) {
+  const owner = normalizeNumber(process.env.OWNER || "");
+  const jidNum = normalizeNumber((jid || "").split("@")[0]); // contoh: 628xxx@s.whatsapp.net
+  return owner && jidNum === owner;
+}
+
+async function rejectNotOwner(sock, jid) {
+  await sock.sendMessage(jid, { text: "⛔ Command ini khusus *OWNER*." });
+}
     // ================== HANDLER PESAN (CUMA 1 INI) ==================
     sock.ev.on("messages.upsert", async ({ messages, type }) => {
       try {
@@ -187,8 +199,7 @@ async function startWA() {
 
         // ====== LIST ======
         if (cmd === "addlist") {
-          if (!args) {
-            await sock.sendMessage(jid, { text: "Format: addlist <item>\nContoh: addlist Netflix" });
+  if (!isOwner(jid)) return rejectNotOwner(sock, jid); { text: "Format: addlist <item>\nContoh: addlist Netflix" });
             return;
           }
           userList.push({ text: args, ts: Date.now() });
