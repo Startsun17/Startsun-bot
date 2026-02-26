@@ -17,9 +17,9 @@ const PORT = process.env.PORT || 8080;
 const OWNER = (process.env.OWNER || "").trim();
 
 // Railway Volume: set mount ke /data
-const DATA_DIR = process.env.DATA_DIR || "/data";
-const SESSION_DIR = path.join(DATA_DIR, "session");
-const DB_FILE = path.join(DATA_DIR, "data.json");
+const DATA_DIR = "./data";
+const SESSION_DIR = "./session";
+const DB_FILE = "./data.json";
 
 let lastQr = null;
 
