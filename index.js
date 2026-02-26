@@ -138,6 +138,92 @@ async function startWA() {
 
     // ===== HANDLER PESAN MASUK =====
     sock.ev.on("messages.upsert", async ({ messages, type }) => {
+  try {
+    if (type !== "notify") return;
+
+    const msg = messages?.[0];
+    if (!msg?.message) return;
+    if (msg.key.fromMe) return;
+
+    const jid = msg.key.remoteJid;
+
+    const text =
+      msg.message.conversation ||
+      msg.message.extendedTextMessage?.text ||
+      msg.message.imageMessage?.caption ||
+      msg.message.videoMessage?.caption ||
+      "";
+
+    if (!text) return;
+
+    // ✅ bikin prefix fleksibel: .menu, !menu, #menu, menu
+    const body = text.trim().toLowerCase().replace(/^[.!#]/, "");
+
+    // split command + args
+    const [cmdRaw, ...rest] = body.split(/\s+/);
+    const cmd = (cmdRaw || "").trim();
+    const args = rest.join(" ").trim();
+
+    // === COMMAND SIMPLE (ping/order/menu) ===
+    const commands = {
+      ping: "pong 🔥 bot aktif!",
+      order: "✅ Halo kak! Orderan kamu sedang diproses ya 🤝",
+      menu: "📋 *MENU*\n\n• ping\n• order\n• menu\n• addlist <item>\n• list\n• dellist <nomor>\n• clearlist",
+      help: "📋 *MENU*\n\n• ping\n• order\n• menu\n• addlist <item>\n• list\n• dellist <nomor>\n• clearlist",
+    };
+
+    // === LIST SYSTEM ===
+    const db = loadDB();
+    const userList = getUserList(db, jid);
+
+    if (cmd === "addlist") {
+      if (!args) {
+        await sock.sendMessage(jid, { text: "Format: addlist <item>\nContoh: addlist Netflix" });
+        return;
+      }
+      userList.push({ text: args, ts: Date.now() });
+      saveDB(db);
+      await sock.sendMessage(jid, { text: `✅ Ditambahin ke list: *${args}*\n\n${formatList(userList)}` });
+      return;
+    }
+
+    if (cmd === "list") {
+      await sock.sendMessage(jid, { text: formatList(userList) });
+      return;
+    }
+
+    if (cmd === "dellist") {
+      const n = parseInt(args, 10);
+      if (!n || n < 1 || n > userList.length) {
+        await sock.sendMessage(jid, { text: "Format: dellist <nomor>\nContoh: dellist 2" });
+        return;
+      }
+      const removed = userList.splice(n - 1, 1)[0];
+      saveDB(db);
+      await sock.sendMessage(jid, { text: `🗑️ Dihapus: *${removed.text}*\n\n${formatList(userList)}` });
+      return;
+    }
+
+    if (cmd === "clearlist") {
+      db.lists[jid] = [];
+      saveDB(db);
+      await sock.sendMessage(jid, { text: "🧹 List kamu udah dikosongin." });
+      return;
+    }
+
+    // fallback command biasa
+    if (commands[cmd]) {
+      await sock.sendMessage(jid, { text: commands[cmd] });
+      return;
+    }
+
+    // optional: kalau gak dikenal, diem aja (biar gak spam)
+    // await sock.sendMessage(jid, { text: "Command tidak dikenal. Ketik: menu" });
+
+  } catch (err) {
+    console.log("Error baca pesan:", err);
+  }
+}); ({ m=> {
       try {
         if (type !== "notify") return;
 
