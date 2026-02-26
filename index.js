@@ -197,72 +197,44 @@ async function rejectNotOwner(sock, jid) {
           return;
         }
 
-        // ====== LIST ======
-        if (cmd === "addlist") {
-  if (!isOwner(jid)) return rejectNotOwner(sock, jid); { text: "Format: addlist <item>\nContoh: addlist Netflix" });
-            return;
-          }
-          userList.push({ text: args, ts: Date.now() });
-          saveDB(db);
-          await sock.sendMessage(jid, { text: `✅ Ditambahin: *${args}*\n\n${formatList(userList)}` });
-          return;
-        }
+// ====== LIST ======
+if (cmd === "addlist") {
+  if (!isOwner(jid)) return rejectNotOwner(sock, jid);
 
-        if (cmd === "list") {
-          await sock.sendMessage(jid, { text: formatList(userList) });
-          return;
-        }
-
-        if (cmd === "dellist") {
-          const n = parseInt(args, 10);
-          if (!n || n < 1 || n > userList.length) {
-            await sock.sendMessage(jid, { text: "Format: dellist <nomor>\nContoh: dellist 2" });
-            return;
-          }
-          const removed = userList.splice(n - 1, 1)[0];
-          saveDB(db);
-          await sock.sendMessage(jid, { text: `🗑️ Dihapus: *${removed.text}*\n\n${formatList(userList)}` });
-          return;
-        }
-
-        if (cmd === "clearlist") {
-          db.lists[jid] = [];
-          saveDB(db);
-          await sock.sendMessage(jid, { text: "🧹 List kamu udah dikosongin." });
-          return;
-        }
-
-        // ====== BASIC COMMANDS ======
-        if (cmd === "menu" || cmd === "help") {
-          await sock.sendMessage(jid, { text: formatMenu() });
-          return;
-        }
-
-        if (cmd === "ping") {
-          await sock.sendMessage(jid, { text: "pong 🔥 bot aktif!" });
-          return;
-        }
-
-        if (cmd === "order") {
-          await sock.sendMessage(jid, { text: "✅ Halo kak! Orderan kamu sedang diproses ya 🤝" });
-          return;
-        }
-
-        // ====== OPTIONAL AUTO-WELCOME (kalau user ngetik "hi/hallo") ======
-        // Kalau kamu gak mau auto, hapus blok ini
-        if (["hi", "hii", "halo", "hallo", "assalamualaikum", "p"].includes(cmd)) {
-          const w = db.welcome[jid];
-          if (w) await sock.sendMessage(jid, { text: w });
-          return;
-        }
-      } catch (err) {
-        console.log("Error baca pesan:", err);
-      }
-    });
-  } catch (err) {
-    console.log("Start error:", err?.message || err);
-    setTimeout(startWA, 3000);
+  if (!args) {
+    await sock.sendMessage(jid, { text: "Format: addlist <item>\nContoh: addlist Netflix" });
+    return;
   }
+  userList.push({ text: args, ts: Date.now() });
+  saveDB(db);
+  await sock.sendMessage(jid, { text: `✅ Ditambahin: *${args}*\n\n${formatList(userList)}` });
+  return;
 }
 
-startWA();
+if (cmd === "list") {
+  await sock.sendMessage(jid, { text: formatList(userList) });
+  return;
+}
+
+if (cmd === "dellist") {
+  if (!isOwner(jid)) return rejectNotOwner(sock, jid);
+
+  const n = parseInt(args, 10);
+  if (!n || n < 1 || n > userList.length) {
+    await sock.sendMessage(jid, { text: "Format: dellist <nomor>\nContoh: dellist 2" });
+    return;
+  }
+  const removed = userList.splice(n - 1, 1)[0];
+  saveDB(db);
+  await sock.sendMessage(jid, { text: `🗑️ Dihapus: *${removed.text}*\n\n${formatList(userList)}` });
+  return;
+}
+
+if (cmd === "clearlist") {
+  if (!isOwner(jid)) return rejectNotOwner(sock, jid);
+
+  db.lists[jid] = [];
+  saveDB(db);
+  await sock.sendMessage(jid, { text: "🧹 List kamu udah dikosongin." });
+  return;
+}
