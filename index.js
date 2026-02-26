@@ -1,229 +1,137 @@
-import fs from "fs";
-import path from "path";
-import express from "express";
-import pino from "pino";
-import QRCode from "qrcode";
-
 import makeWASocket, {
   DisconnectReason,
   useMultiFileAuthState,
   fetchLatestBaileysVersion,
 } from "@whiskeysockets/baileys";
+import pino from "pino";
+import express from "express";
+import QRCode from "qrcode";
+import fs from "fs";
+import path from "path";
 
+// ================== WEB SERVER ==================
 const app = express();
 const PORT = process.env.PORT || 8080;
 
-let sock = null;
 let lastQr = null;
-let waStatus = "starting"; // starting | qr | connected | disconnected
 
-// ===== WEB ROUTES =====
 app.get("/", (req, res) => {
-  res.json({
-    ok: true,
-    status: waStatus,
-    qrEndpoint: "/qr",
-    tips: "Buka /qr untuk scan QR dari WhatsApp > Perangkat tertaut > Tautkan perangkat",
-  });
+  res.send("OK ✅ Startsun-bot jalan. Buka /qr untuk scan barcode.");
 });
 
 app.get("/qr", async (req, res) => {
   try {
-    if (!lastQr) {
-      return res
-        .status(404)
-        .send("QR belum tersedia. Tunggu beberapa detik lalu refresh /qr");
-    }
-
-    // bikin PNG biar jelas
-    const pngBuffer = await QRCode.toBuffer(lastQr, {
-      type: "png",
-      errorCorrectionLevel: "M",
-      margin: 2,
-      scale: 10,
-      width: 520,
-    });
-
+    if (!lastQr) return res.status(404).send("QR belum tersedia. Tunggu lalu refresh /qr");
+    const img = await QRCode.toBuffer(lastQr, { width: 520, margin: 2 });
     res.setHeader("Content-Type", "image/png");
-    res.send(pngBuffer);
-  } catch (err) {
-    res.status(500).send("Gagal generate QR: " + (err?.message || err));
+    res.send(img);
+  } catch (e) {
+    res.status(500).send("Gagal generate QR");
   }
 });
 
-app.get("/health", (req, res) => res.send("OK"));
+app.listen(PORT, () => console.log("Web server ready di port", PORT));
 
-app.listen(PORT, () => {
-  console.log("Web server ready di port", PORT);
-  console.log("QR tersedia di endpoint /qr");
-});
+// ================== PERSISTENT DB ==================
+// Biar gak ilang: pasang Railway Volume ke /data
+const DATA_DIR = process.env.DATA_DIR || "/data";
+const DATA_FILE = path.join(DATA_DIR, "data.json");
 
-// ===== WHATSAPP START =====
-const DATA_FILE = path.join(process.cwd(), "data.json");
+function ensureDataDir() {
+  try {
+    if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+  } catch {}
+}
 
 function loadDB() {
+  ensureDataDir();
   try {
-    if (!fs.existsSync(DATA_FILE)) return { lists: {} };
-    const raw = fs.readFileSync(DATA_FILE, "utf-8");
-    return raw ? JSON.parse(raw) : { lists: {} };
-  } catch (e) {
-    console.log("DB rusak, reset data.json:", e);
-    return { lists: {} };
+    if (!fs.existsSync(DATA_FILE)) return { lists: {}, welcome: {} };
+    return JSON.parse(fs.readFileSync(DATA_FILE, "utf-8"));
+  } catch {
+    return { lists: {}, welcome: {} };
   }
 }
 
 function saveDB(db) {
+  ensureDataDir();
   fs.writeFileSync(DATA_FILE, JSON.stringify(db, null, 2));
 }
 
 function getUserList(db, jid) {
+  if (!db.lists) db.lists = {};
   if (!db.lists[jid]) db.lists[jid] = [];
   return db.lists[jid];
 }
 
-function formatList(items) {
-  if (!items.length) return "📭 List kamu masih kosong.\nKetik: addlist <item>";
-  const lines = items.map((x, i) => `${i + 1}. ${x.text}`);
-  return `📋 *LIST KAMU*\n\n${lines.join("\n")}\n\n➕ addlist <item>\n❌ dellist <nomor>\n🧹 clearlist`;
+function formatList(list) {
+  if (!list || list.length === 0) {
+    return "📭 List kamu kosong.\n\nKetik: addlist <item>\nContoh: addlist Netflix";
+  }
+  const lines = list.map((x, i) => `${i + 1}. ${x.text}`);
+  return `📌 *LIST KAMU*\n\n${lines.join("\n")}\n\n• addlist <item>\n• dellist <nomor>\n• clearlist`;
 }
+
+function formatMenu() {
+  return (
+    "📋 *MENU*\n\n" +
+    "• ping\n" +
+    "• order\n" +
+    "• menu\n" +
+    "• addlist <item>\n" +
+    "• list\n" +
+    "• dellist <nomor>\n" +
+    "• clearlist\n" +
+    "• setwelcome <pesan>\n" +
+    "• welcome\n" +
+    "• delwelcome"
+  );
+}
+
+// ================== WHATSAPP BOT ==================
+const logger = pino({ level: "silent" });
+
 async function startWA() {
   try {
-    waStatus = "starting";
-
     const { state, saveCreds } = await useMultiFileAuthState("session");
     const { version } = await fetchLatestBaileysVersion();
 
-    sock = makeWASocket({
-      logger: pino({ level: "silent" }),
+    const sock = makeWASocket({
+      logger,
       auth: state,
       version,
-      printQRInTerminal: false, // kita pakai /qr aja
+      printQRInTerminal: false,
       browser: ["Startsun-bot", "Chrome", "1.0.0"],
     });
 
-    // simpan session tiap update
     sock.ev.on("creds.update", saveCreds);
 
-    // status koneksi + qr
     sock.ev.on("connection.update", (update) => {
       const { connection, qr, lastDisconnect } = update;
 
       if (qr) {
         lastQr = qr;
-        waStatus = "qr";
         console.log("QR baru tersedia. Buka /qr untuk scan.");
       }
 
       if (connection === "open") {
         lastQr = null;
-        waStatus = "connected";
         console.log("✅ Bot berhasil connect!");
       }
 
       if (connection === "close") {
-        waStatus = "disconnected";
-
         const statusCode = lastDisconnect?.error?.output?.statusCode;
         const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
 
         console.log("❌ Koneksi putus. code:", statusCode, "| reconnect:", shouldReconnect);
 
-        if (shouldReconnect) {
-          setTimeout(startWA, 3000);
-        } else {
-          console.log("⚠️ Logged out. Hapus folder 'session' lalu deploy ulang dan scan QR lagi.");
-        }
+        if (shouldReconnect) setTimeout(startWA, 3000);
+        else console.log("⚠️ Logged out. Hapus folder 'session' lalu deploy ulang dan scan QR lagi.");
       }
     });
 
-    // ===== HANDLER PESAN MASUK =====
+    // ================== HANDLER PESAN (CUMA 1 INI) ==================
     sock.ev.on("messages.upsert", async ({ messages, type }) => {
-  try {
-    if (type !== "notify") return;
-
-    const msg = messages?.[0];
-    if (!msg?.message) return;
-    if (msg.key.fromMe) return;
-
-    const jid = msg.key.remoteJid;
-
-    const text =
-      msg.message.conversation ||
-      msg.message.extendedTextMessage?.text ||
-      msg.message.imageMessage?.caption ||
-      msg.message.videoMessage?.caption ||
-      "";
-
-    if (!text) return;
-
-    // ✅ bikin prefix fleksibel: .menu, !menu, #menu, menu
-    const body = text.trim().toLowerCase().replace(/^[.!#]/, "");
-
-    // split command + args
-    const [cmdRaw, ...rest] = body.split(/\s+/);
-    const cmd = (cmdRaw || "").trim();
-    const args = rest.join(" ").trim();
-
-    // === COMMAND SIMPLE (ping/order/menu) ===
-    const commands = {
-      ping: "pong 🔥 bot aktif!",
-      order: "✅ Halo kak! Orderan kamu sedang diproses ya 🤝",
-      menu: "📋 *MENU*\n\n• ping\n• order\n• menu\n• addlist <item>\n• list\n• dellist <nomor>\n• clearlist",
-      help: "📋 *MENU*\n\n• ping\n• order\n• menu\n• addlist <item>\n• list\n• dellist <nomor>\n• clearlist",
-    };
-
-    // === LIST SYSTEM ===
-    const db = loadDB();
-    const userList = getUserList(db, jid);
-
-    if (cmd === "addlist") {
-      if (!args) {
-        await sock.sendMessage(jid, { text: "Format: addlist <item>\nContoh: addlist Netflix" });
-        return;
-      }
-      userList.push({ text: args, ts: Date.now() });
-      saveDB(db);
-      await sock.sendMessage(jid, { text: `✅ Ditambahin ke list: *${args}*\n\n${formatList(userList)}` });
-      return;
-    }
-
-    if (cmd === "list") {
-      await sock.sendMessage(jid, { text: formatList(userList) });
-      return;
-    }
-
-    if (cmd === "dellist") {
-      const n = parseInt(args, 10);
-      if (!n || n < 1 || n > userList.length) {
-        await sock.sendMessage(jid, { text: "Format: dellist <nomor>\nContoh: dellist 2" });
-        return;
-      }
-      const removed = userList.splice(n - 1, 1)[0];
-      saveDB(db);
-      await sock.sendMessage(jid, { text: `🗑️ Dihapus: *${removed.text}*\n\n${formatList(userList)}` });
-      return;
-    }
-
-    if (cmd === "clearlist") {
-      db.lists[jid] = [];
-      saveDB(db);
-      await sock.sendMessage(jid, { text: "🧹 List kamu udah dikosongin." });
-      return;
-    }
-
-    // fallback command biasa
-    if (commands[cmd]) {
-      await sock.sendMessage(jid, { text: commands[cmd] });
-      return;
-    }
-
-    // optional: kalau gak dikenal, diem aja (biar gak spam)
-    // await sock.sendMessage(jid, { text: "Command tidak dikenal. Ketik: menu" });
-
-  } catch (err) {
-    console.log("Error baca pesan:", err);
-  }
-}); ({ m=> {
       try {
         if (type !== "notify") return;
 
@@ -240,42 +148,107 @@ async function startWA() {
           msg.message.videoMessage?.caption ||
           "";
 
-        const body = text.trim().toLowerCase();
-        if (!body) return;
+        if (!text) return;
 
-        console.log("Pesan masuk:", body, "dari:", jid);
+        // prefix fleksibel: .menu, !menu, #menu, menu
+        const cleaned = text.trim().toLowerCase().replace(/^[.!#]/, "");
+        const [cmdRaw, ...rest] = cleaned.split(/\s+/);
+        const cmd = (cmdRaw || "").trim();
+        const args = rest.join(" ").trim();
 
-        // command contoh
-         {
+        const db = loadDB();
+        const userList = getUserList(db, jid);
+        if (!db.welcome) db.welcome = {};
+
+        // ====== WELCOME ======
+        if (cmd === "setwelcome") {
+          if (!args) {
+            await sock.sendMessage(jid, { text: "Format: setwelcome <pesan>\nContoh: setwelcome Halo kak 👋" });
+            return;
+          }
+          db.welcome[jid] = args;
+          saveDB(db);
+          await sock.sendMessage(jid, { text: `✅ Welcome disimpan:\n"${args}"` });
+          return;
+        }
+
+        if (cmd === "welcome") {
+          const w = db.welcome[jid];
+          await sock.sendMessage(jid, { text: w ? `👋 Welcome kamu:\n"${w}"` : "Kamu belum set welcome.\nKetik: setwelcome <pesan>" });
+          return;
+        }
+
+        if (cmd === "delwelcome") {
+          delete db.welcome[jid];
+          saveDB(db);
+          await sock.sendMessage(jid, { text: "🗑️ Welcome kamu dihapus." });
+          return;
+        }
+
+        // ====== LIST ======
+        if (cmd === "addlist") {
+          if (!args) {
+            await sock.sendMessage(jid, { text: "Format: addlist <item>\nContoh: addlist Netflix" });
+            return;
+          }
+          userList.push({ text: args, ts: Date.now() });
+          saveDB(db);
+          await sock.sendMessage(jid, { text: `✅ Ditambahin: *${args}*\n\n${formatList(userList)}` });
+          return;
+        }
+
+        if (cmd === "list") {
+          await sock.sendMessage(jid, { text: formatList(userList) });
+          return;
+        }
+
+        if (cmd === "dellist") {
+          const n = parseInt(args, 10);
+          if (!n || n < 1 || n > userList.length) {
+            await sock.sendMessage(jid, { text: "Format: dellist <nomor>\nContoh: dellist 2" });
+            return;
+          }
+          const removed = userList.splice(n - 1, 1)[0];
+          saveDB(db);
+          await sock.sendMessage(jid, { text: `🗑️ Dihapus: *${removed.text}*\n\n${formatList(userList)}` });
+          return;
+        }
+
+        if (cmd === "clearlist") {
+          db.lists[jid] = [];
+          saveDB(db);
+          await sock.sendMessage(jid, { text: "🧹 List kamu udah dikosongin." });
+          return;
+        }
+
+        // ====== BASIC COMMANDS ======
+        if (cmd === "menu" || cmd === "help") {
+          await sock.sendMessage(jid, { text: formatMenu() });
+          return;
+        }
+
+        if (cmd === "ping") {
           await sock.sendMessage(jid, { text: "pong 🔥 bot aktif!" });
           return;
         }
 
-         {
-          await sock.sendMessage(jid, {
-            text: "✅ Halo kak! Orderan kamu sedang diproses ya 🤝",
-          });
+        if (cmd === "order") {
+          await sock.sendMessage(jid, { text: "✅ Halo kak! Orderan kamu sedang diproses ya 🤝" });
           return;
         }
-        const commands = {
-  ping: "pong 🔥 bot aktif!",
-  order: "✅ Halo kak! Orderan kamu sedang diproses ya 🤝",
-  menu: "📋 *MENU*\n\n• ping\n• order\n• menu"
-};
 
-if (commands[body]) {
-  await sock.sendMessage(jid, { text: commands[body] });
-  return;
-}
-
-        // default: opsional
-        // await sock.sendMessage(jid, { text: "Ketik: ping / order" });
+        // ====== OPTIONAL AUTO-WELCOME (kalau user ngetik "hi/hallo") ======
+        // Kalau kamu gak mau auto, hapus blok ini
+        if (["hi", "hii", "halo", "hallo", "assalamualaikum", "p"].includes(cmd)) {
+          const w = db.welcome[jid];
+          if (w) await sock.sendMessage(jid, { text: w });
+          return;
+        }
       } catch (err) {
-        console.log("Error baca pesan:", err?.message || err);
+        console.log("Error baca pesan:", err);
       }
     });
   } catch (err) {
-    waStatus = "disconnected";
     console.log("Start error:", err?.message || err);
     setTimeout(startWA, 3000);
   }
