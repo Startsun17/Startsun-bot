@@ -1,3 +1,5 @@
+import fs from "fs";
+import path from "path";
 import express from "express";
 import pino from "pino";
 import QRCode from "qrcode";
