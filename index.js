@@ -59,6 +59,33 @@ app.listen(PORT, () => {
 });
 
 // ===== WHATSAPP START =====
+const DATA_FILE = path.join(process.cwd(), "data.json");
+
+function loadDB() {
+  try {
+    if (!fs.existsSync(DATA_FILE)) return { lists: {} };
+    const raw = fs.readFileSync(DATA_FILE, "utf-8");
+    return raw ? JSON.parse(raw) : { lists: {} };
+  } catch (e) {
+    console.log("DB rusak, reset data.json:", e);
+    return { lists: {} };
+  }
+}
+
+function saveDB(db) {
+  fs.writeFileSync(DATA_FILE, JSON.stringify(db, null, 2));
+}
+
+function getUserList(db, jid) {
+  if (!db.lists[jid]) db.lists[jid] = [];
+  return db.lists[jid];
+}
+
+function formatList(items) {
+  if (!items.length) return "📭 List kamu masih kosong.\nKetik: addlist <item>";
+  const lines = items.map((x, i) => `${i + 1}. ${x.text}`);
+  return `📋 *LIST KAMU*\n\n${lines.join("\n")}\n\n➕ addlist <item>\n❌ dellist <nomor>\n🧹 clearlist`;
+}
 async function startWA() {
   try {
     waStatus = "starting";
